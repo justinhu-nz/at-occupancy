@@ -142,12 +142,13 @@
     occupancy category. AT's counters switch category at 40% and 90% of seated capacity, so each category
     corresponds to a known band of real loads. This page combines those bands with vehicle capacities to
     estimate how many people are aboard right now. It is an estimate, not a count.</p>
-    <p>Where a vehicle sits inside its band depends on how busy the network is. Every trip starts and ends
-    empty, and service is sized for the peak, so when the city is quiet most vehicles sit near the bottom of
-    whatever band they report. The page scores overall busyness from the mix of categories being reported —
-    0 if every vehicle says empty, 1 if every vehicle says standing — and places each vehicle between the
-    15th and 55th percentile of its own band accordingly. Quiet night, low in the band; weekday peak, high
-    in it. The current figures are shown below.</p>
+    <p>Where a vehicle sits inside its band is set once for the whole network. Normally each vehicle is
+    placed at the 30th percentile of its own band: every trip starts and ends empty, and service is sized
+    for the peak, so more vehicles sit near the bottom of a band than the top. Overnight and in the early
+    morning, when only a fraction of the fleet is out and those vehicles run close to empty, the position
+    drops to the 15th percentile. Everything in between — weekday peak, weekday midday and weekends alike —
+    is treated the same, because a bus reporting "many seats" on a Saturday afternoon is not meaningfully
+    different from one reporting it at 8am. The current figures are shown below.</p>
     <div class="scroll"><table id="t-model">
       <thead><tr><th>Category</th><th>Band</th><th class="num">Bus (47+31)</th><th class="num">Double-decker (85+25)</th><th class="num">Train (230+143)</th></tr></thead>
       <tbody></tbody></table></div>
@@ -224,28 +225,27 @@ function band(prof, status) {
   return [c.lo(prof.seated, prof.standing), c.hi(prof.seated, prof.standing)];
 }
 
-// ---- how busy is the network right now? -------------------------------------
-// One number, 0 (everything empty) to 1 (everything standing or worse). It is just
-// the average reported category, with the crowded categories all counting as "full".
-function busyness(list) {
-  if (!list.length) return null;
-  var s = 0;
-  list.forEach(function (v) { s += Math.min(v.occ, 3) / 3; });
-  return s / list.length;
-}
+// ---- how much service is running right now? ---------------------------------
+// The only time we lower our expectations is the dead of night and the early morning,
+// when barely any vehicles are out and the few that are run close to empty. Every
+// other period — weekday peak, weekday midday, weekends — is treated alike: a bus
+// reporting "many seats" on a Saturday afternoon is not meaningfully different from
+// one reporting it at 8am, so the model should not pretend otherwise. Using the
+// vehicle count rather than the reported occupancy mix also avoids compressing the
+// busy and quiet halves of a peak toward each other.
+var SERVICE_LOW  = 60;    // at or below this many vehicles: deep night
+var SERVICE_FULL = 250;   // at or above this: normal service, no discount
+var POS_NIGHT    = 0.15;  // position within the band overnight
+var POS_NORMAL   = 0.30;  // position within the band the rest of the time
 
-// ---- where inside its band does a vehicle sit? ------------------------------
-// A vehicle's category tells us its load is between lo and hi. Which end it sits at
-// depends on how busy the network is: when most vehicles report empty, the ones
-// reporting "many seats" are near the bottom of that band; at peak they are near the
-// top. So the position is a straight line in the busyness score, from the 15th
-// percentile of the band when the city is asleep to the 55th when it is at capacity.
-var BUSY = null;   // busyness score for the current snapshot
-var POS  = 0.3;    // resulting position within every band, 0..1
+var INSERVICE = null;   // vehicles in service for the current snapshot
+var POS = POS_NORMAL;   // resulting position within every band, 0..1
 
-function positionFor(busy) {
-  if (busy == null) return 0.3;                       // no data: middling default
-  return Math.max(0.15, Math.min(0.55, 0.15 + 0.6 * busy));
+function positionFor(count) {
+  if (count == null) return POS_NORMAL;
+  var t = (count - SERVICE_LOW) / (SERVICE_FULL - SERVICE_LOW);
+  t = Math.max(0, Math.min(1, t));
+  return POS_NIGHT + t * (POS_NORMAL - POS_NIGHT);
 }
 function estimate(prof, status) {
   var b = band(prof, status);
@@ -330,11 +330,11 @@ function build(entities, routes) {
     });
   });
 
-  // Score the whole network's busyness, then score each vehicle. This uses every
-  // in-service vehicle, not the filtered subset: how busy the city is at this moment
-  // is a property of the network, not of what the reader has selected.
-  BUSY = busyness(list);
-  POS  = positionFor(BUSY);
+  // Measure how much service is running, then score each vehicle. This counts every
+  // in-service vehicle, not the filtered subset: the level of service is a property of
+  // the network, not of what the reader has selected.
+  INSERVICE = list.length;
+  POS = positionFor(INSERVICE);
   list.forEach(function (v) {
     var prof = PROFILES[v.mode], b = band(prof, v.occ);
     v.lo = b[0]; v.hi = b[1];
@@ -579,8 +579,10 @@ function load() {
       build(res.entity || [], routes);
       renderAll();
       renderModel();
-      document.getElementById('fitnote').textContent = BUSY == null ? '' :
-        'Network busyness ' + (100 * BUSY).toFixed(0) + '%, so each vehicle is placed at the ' +
+      document.getElementById('fitnote').textContent = INSERVICE == null ? '' :
+        INSERVICE + ' vehicles in service' +
+        (POS < POS_NORMAL ? ' — reduced overnight service, so each vehicle is placed lower, at the '
+                          : ' — normal service, so each vehicle is placed at the ') +
         (100 * POS).toFixed(0) + 'th percentile of its band.';
       document.getElementById('ferrynote').textContent = META.ferriesRunning
         ? 'Ferries are excluded: ' + META.ferriesRunning + ' were sailing, but they do not report occupancy.'
