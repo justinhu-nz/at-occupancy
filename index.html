@@ -142,13 +142,12 @@
     occupancy category. AT's counters switch category at 40% and 90% of seated capacity, so each category
     corresponds to a known band of real loads. This page combines those bands with vehicle capacities to
     estimate how many people are aboard right now. It is an estimate, not a count.</p>
-    <p>Where a vehicle sits inside its band is not guessed. Because the thresholds are known, the counts in
-    each category are an interval-censored sample of the load distribution across the network, so a gamma
-    distribution is fitted to them by maximum likelihood on every refresh, and each vehicle is scored at the
-    conditional mean of its own band. The fit adapts on its own: late at night, when most vehicles report
-    empty, it places the rest low in their bands; at peak it pushes them up. When too few categories are
-    reported to identify a fit, the page falls back to fixed percentiles (30th for the lightly-loaded
-    categories) and says so below.</p>
+    <p>Where a vehicle sits inside its band depends on how busy the network is. Every trip starts and ends
+    empty, and service is sized for the peak, so when the city is quiet most vehicles sit near the bottom of
+    whatever band they report. The page scores overall busyness from the mix of categories being reported —
+    0 if every vehicle says empty, 1 if every vehicle says standing — and places each vehicle between the
+    15th and 55th percentile of its own band accordingly. Quiet night, low in the band; weekday peak, high
+    in it. The current figures are shown below.</p>
     <div class="scroll"><table id="t-model">
       <thead><tr><th>Category</th><th>Band</th><th class="num">Bus (47+31)</th><th class="num">Double-decker (85+25)</th><th class="num">Train (230+143)</th></tr></thead>
       <tbody></tbody></table></div>
@@ -187,33 +186,29 @@ var DD_ROUTES = { NX1:1, NX2:1, WX1:1 };
 // AT's automatic passenger counters switch category at 40% and 90% of SEATED
 // capacity (Propellerhead, who built the feature for AT). Each category is therefore
 // a known band of real loads; lo/hi return that band in people for a given profile.
-// `p` picks a point within the band. Loads are right-skewed — at any moment far more
-// vehicles sit near the bottom of a band than the top — so every category sits below
-// its midpoint, and the lightly-loaded ones furthest below. These are deliberately
-// conservative: where the band is wide and the evidence thin, undercount.
 // EMPTY is an absolute passenger count, not a share of seats: GTFS defines it as "no
 // passengers or very few", which does not scale with vehicle size. Treating it as 5%
 // of seats implied 12 people aboard an "empty" train.
 var CATEGORIES = [
-  { label:'Empty',                colour:'var(--c0)', p:0.4,
+  { label:'Empty',                colour:'var(--c0)',
     lo:function(S,T){ return 0; },          hi:function(S,T){ return 3; },
     band:'0 – 3 passengers' },
-  { label:'Many seats available', colour:'var(--c1)', p:0.3,
+  { label:'Many seats available', colour:'var(--c1)',
     lo:function(S,T){ return 3; },          hi:function(S,T){ return 0.40*S; },
     band:'3 passengers – 40% of seats' },
-  { label:'Few seats available',  colour:'var(--c2)', p:0.35,
+  { label:'Few seats available',  colour:'var(--c2)',
     lo:function(S,T){ return 0.40*S; },     hi:function(S,T){ return 0.90*S; },
     band:'40 – 90% of seats' },
-  { label:'Standing room only',   colour:'var(--c3)', p:0.35,
+  { label:'Standing room only',   colour:'var(--c3)',
     lo:function(S,T){ return 0.90*S; },     hi:function(S,T){ return S + 0.5*T; },
     band:'90% of seats – half standing' },
-  { label:'Crushed standing',     colour:'var(--c4)', p:0.45,
+  { label:'Crushed standing',     colour:'var(--c4)',
     lo:function(S,T){ return S + 0.5*T; },  hi:function(S,T){ return S + 0.9*T; },
     band:'50 – 90% of standing' },
-  { label:'Full',                 colour:'var(--c5)', p:0.45,
+  { label:'Full',                 colour:'var(--c5)',
     lo:function(S,T){ return S + 0.9*T; },  hi:function(S,T){ return S + T; },
     band:'90 – 100% of standing' },
-  { label:'Not accepting',        colour:'var(--c6)', p:0.5,
+  { label:'Not accepting',        colour:'var(--c6)',
     lo:function(S,T){ return S + T; },      hi:function(S,T){ return S + T; },
     band:'at capacity' }
 ];
@@ -229,116 +224,44 @@ function band(prof, status) {
   return [c.lo(prof.seated, prof.standing), c.hi(prof.seated, prof.standing)];
 }
 
-// ---- fallback estimator: fixed percentile within the band -------------------
-// Used only when the snapshot is too sparse to fit a demand distribution.
-function estimateFixed(prof, status) {
-  var b = band(prof, status);
-  return b[0] + CATEGORIES[status].p * (b[1] - b[0]);
+// ---- how busy is the network right now? -------------------------------------
+// One number, 0 (everything empty) to 1 (everything standing or worse). It is just
+// the average reported category, with the crowded categories all counting as "full".
+function busyness(list) {
+  if (!list.length) return null;
+  var s = 0;
+  list.forEach(function (v) { s += Math.min(v.occ, 3) / 3; });
+  return s / list.length;
 }
-// Triangular over the band, mode placed so the mean equals the point estimate.
-function varianceFixed(prof, status) {
+
+// ---- where inside its band does a vehicle sit? ------------------------------
+// A vehicle's category tells us its load is between lo and hi. Which end it sits at
+// depends on how busy the network is: when most vehicles report empty, the ones
+// reporting "many seats" are near the bottom of that band; at peak they are near the
+// top. So the position is a straight line in the busyness score, from the 15th
+// percentile of the band when the city is asleep to the 55th when it is at capacity.
+var BUSY = null;   // busyness score for the current snapshot
+var POS  = 0.3;    // resulting position within every band, 0..1
+
+function positionFor(busy) {
+  if (busy == null) return 0.3;                       // no data: middling default
+  return Math.max(0.15, Math.min(0.55, 0.15 + 0.6 * busy));
+}
+function estimate(prof, status) {
+  var b = band(prof, status);
+  return b[0] + POS * (b[1] - b[0]);
+}
+// Each vehicle's true load is treated as a triangular distribution over its band, with
+// the mode placed so the distribution's mean equals the point estimate. Summing those
+// variances across vehicles gives an aggregate spread far tighter than adding the raw
+// bands, because independent per-vehicle errors cancel.
+function variance(prof, status) {
   var b = band(prof, status), a = b[0], c = b[1];
   if (c <= a) return 0;
-  var m = 3 * estimateFixed(prof, status) - a - c;
+  var m = 3 * estimate(prof, status) - a - c;
   return (a*a + m*m + c*c - a*m - a*c - m*c) / 18;
 }
 
-// ---- gamma distribution helpers --------------------------------------------
-function lgamma(z) {
-  var g = [676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059,
-           12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
-  if (z < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * z)) - lgamma(1 - z);
-  z -= 1;
-  var x = 0.99999999999980993;
-  for (var i = 0; i < 8; i++) x += g[i] / (z + i + 1);
-  var t = z + 7.5;
-  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
-}
-// Regularised lower incomplete gamma P(a, x).
-function gammaP(a, x) {
-  if (!(x > 0)) return 0;
-  if (x < a + 1) {
-    var term = 1 / a, sum = term, n = 0;
-    while (n < 500) {
-      n++; term *= x / (a + n); sum += term;
-      if (Math.abs(term) < Math.abs(sum) * 1e-14) break;
-    }
-    return sum * Math.exp(-x + a * Math.log(x) - lgamma(a));
-  }
-  var tiny = 1e-300, b = x + 1 - a, c = 1 / tiny, d = 1 / b, h = d;
-  for (var i = 1; i < 500; i++) {
-    var an = -i * (i - a); b += 2;
-    d = an * d + b; if (Math.abs(d) < tiny) d = tiny;
-    c = b + an / c;  if (Math.abs(c) < tiny) c = tiny;
-    d = 1 / d;
-    var de = d * c; h *= de;
-    if (Math.abs(de - 1) < 1e-14) break;
-  }
-  return 1 - Math.exp(-x + a * Math.log(x) - lgamma(a)) * h;
-}
-
-// ---- fit a demand distribution to the observed category mix -----------------
-// AT's thresholds give exact bin boundaries, so the counts in each category are an
-// interval-censored sample of the load distribution. Fit Gamma(k, theta) to them by
-// maximum likelihood and the within-band position stops being a guess: at 9pm the fit
-// piles mass near zero and places vehicles low in their bands; at peak it pushes them
-// up. Load is normalised by seated capacity so buses, double-deckers and trains share
-// one fit — which also keeps the 13 trains from needing their own thin sample.
-function fitDemand(list) {
-  var seen = {}, cells = {};
-  list.forEach(function (v) {
-    seen[v.occ] = 1;
-    var key = v.mode + '|' + v.occ;
-    if (!cells[key]) {
-      var prof = PROFILES[v.mode], b = band(prof, v.occ);
-      cells[key] = { n: 0, lo: b[0] / prof.seated, hi: b[1] / prof.seated };
-    }
-    cells[key].n++;
-  });
-  // Too sparse to identify two parameters: fall back to the fixed percentiles.
-  if (list.length < 30 || Object.keys(seen).length < 3) return null;
-
-  var arr = Object.keys(cells).map(function (k) { return cells[k]; })
-                              .filter(function (c) { return c.hi > c.lo; });
-  var best = null;
-  for (var k = 0.05; k <= 6; k *= 1.08) {
-    for (var th = 0.004; th <= 3; th *= 1.08) {
-      var ll = 0, ok = true;
-      for (var i = 0; i < arr.length; i++) {
-        var pr = gammaP(k, arr[i].hi / th) - gammaP(k, arr[i].lo / th);
-        if (!(pr > 1e-12)) { ok = false; break; }
-        ll += arr[i].n * Math.log(pr);
-      }
-      if (ok && (best === null || ll > best.ll)) best = { ll: ll, k: k, th: th };
-    }
-  }
-  return best;
-}
-
-// Conditional mean and variance of load within a band, under the fitted distribution.
-function fittedMoments(prof, status, fit) {
-  var b = band(prof, status), S = prof.seated;
-  var lo = b[0] / S, hi = b[1] / S;
-  if (hi <= lo) return { mean: b[0], vari: 0 };
-  var k = fit.k, th = fit.th;
-  var pr = gammaP(k, hi / th) - gammaP(k, lo / th);
-  if (!(pr > 1e-9)) return null;
-  var m1 = k * th * (gammaP(k + 1, hi / th) - gammaP(k + 1, lo / th)) / pr;
-  var m2 = k * (k + 1) * th * th * (gammaP(k + 2, hi / th) - gammaP(k + 2, lo / th)) / pr;
-  m1 = Math.min(hi, Math.max(lo, m1));
-  return { mean: m1 * S, vari: Math.max(0, m2 - m1 * m1) * S * S };
-}
-
-// Active estimator: fitted when FIT is available, fixed percentile otherwise.
-var FIT = null;
-function estimate(prof, status) {
-  if (FIT) { var m = fittedMoments(prof, status, FIT); if (m) return m.mean; }
-  return estimateFixed(prof, status);
-}
-function variance(prof, status) {
-  if (FIT) { var m = fittedMoments(prof, status, FIT); if (m) return m.vari; }
-  return varianceFixed(prof, status);
-}
 function operatorOf(label) {
   var m = /^([A-Z]+)/.exec(label);
   if (!m) return 'Unknown';
@@ -407,10 +330,11 @@ function build(entities, routes) {
     });
   });
 
-  // Fit the demand distribution to the whole network, then score each vehicle.
-  // The fit uses every in-service vehicle, not the filtered subset: demand is a
-  // property of the network at this moment, not of what the reader has selected.
-  FIT = fitDemand(list);
+  // Score the whole network's busyness, then score each vehicle. This uses every
+  // in-service vehicle, not the filtered subset: how busy the city is at this moment
+  // is a property of the network, not of what the reader has selected.
+  BUSY = busyness(list);
+  POS  = positionFor(BUSY);
   list.forEach(function (v) {
     var prof = PROFILES[v.mode], b = band(prof, v.occ);
     v.lo = b[0]; v.hi = b[1];
@@ -655,11 +579,9 @@ function load() {
       build(res.entity || [], routes);
       renderAll();
       renderModel();
-      document.getElementById('fitnote').innerHTML = FIT
-        ? 'Within-band positions fitted to this snapshot: Gamma(k=' + FIT.k.toFixed(2) +
-          ', &theta;=' + FIT.th.toFixed(3) + ') on load as a share of seats, mean ' +
-          (100 * FIT.k * FIT.th).toFixed(1) + '% of seated capacity.'
-        : 'Too few occupancy categories reported to fit a distribution — using fallback percentiles.';
+      document.getElementById('fitnote').textContent = BUSY == null ? '' :
+        'Network busyness ' + (100 * BUSY).toFixed(0) + '%, so each vehicle is placed at the ' +
+        (100 * POS).toFixed(0) + 'th percentile of its band.';
       document.getElementById('ferrynote').textContent = META.ferriesRunning
         ? 'Ferries are excluded: ' + META.ferriesRunning + ' were sailing, but they do not report occupancy.'
         : 'Ferries are excluded because they do not report occupancy.';
