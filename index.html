@@ -18,7 +18,9 @@
   body { background:var(--bg); color:var(--fg); margin:0;
          font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
   .wrap { max-width:940px; margin:0 auto; padding:36px 22px 80px; }
-  h1 { font-size:14px; font-weight:600; letter-spacing:.03em; text-transform:uppercase; color:var(--muted); margin:0 0 24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:.03em; text-transform:uppercase; color:var(--muted); margin:0; }
+  .head { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin:0 0 24px; }
+  .head #cityswitch { display:flex; gap:6px; margin-left:auto; }
   .headline { font-size:clamp(27px,6vw,42px); line-height:1.15; font-weight:600; letter-spacing:-.02em; margin:0 0 6px; }
   .headline .n { color:var(--accent); font-variant-numeric:tabular-nums; }
   .sub { color:var(--muted); margin:0 0 26px; }
@@ -84,7 +86,10 @@
 <body>
 <div class="wrap">
 
-<h1>Auckland Transit Ridership</h1>
+<div class="head">
+  <h1 id="title">Auckland Transit Ridership</h1>
+  <span id="cityswitch"></span>
+</div>
 <div id="err"></div>
 
 <p class="headline" id="headline">Loading&hellip;</p>
@@ -138,7 +143,7 @@
   <details>
     <summary>About this estimate</summary>
     <div style="margin-top:10px">
-    <p>Auckland Transport buses and trains carry automatic passenger counters and publish a broad live
+    <p id="apcnote">Buses and trains carry automatic passenger counters and publish a broad live
     occupancy category. AT's counters switch category at 40% and 90% of seated capacity, so each category
     corresponds to a known band of real loads. This page combines those bands with vehicle capacities to
     estimate how many people are aboard right now. It is an estimate, not a count.</p>
@@ -150,12 +155,9 @@
     is treated the same, because a bus reporting "many seats" on a Saturday afternoon is not meaningfully
     different from one reporting it at 8am. The current figures are shown below.</p>
     <div class="scroll"><table id="t-model">
-      <thead><tr><th>Category</th><th>Band</th><th class="num">Bus (47+31)</th><th class="num">Double-decker (85+25)</th><th class="num">Train (230+143)</th></tr></thead>
+      <thead><tr><th>Category</th><th>Band</th><th class="num" id="mh-bus">Bus</th><th class="num" id="mh-dd">Double-decker</th><th class="num" id="mh-train">Train</th></tr></thead>
       <tbody></tbody></table></div>
-    <p style="margin-top:12px">Buses are assumed to be XLBs (47 seated, 78 total). Double-deckers, identified by
-    fleet number (HE05xx, NB50xx, NB53xx, NB54xx) or by running on a route operated entirely by
-    double-deckers (NX1, NX2, WX1), are assumed to seat 85 with 110 total. Trains are assumed
-    to be 3-car units: 230 seated, 143 standing.</p>
+    <p style="margin-top:12px" id="capnote"></p>
     <p>The range is a 90% interval. Each vehicle's true load is modelled as a triangular
     distribution across its category band, and the variances are summed across vehicles — so
     the aggregate is much tighter than the raw bounds, because independent errors cancel.
@@ -172,17 +174,124 @@
 </div>
 <script>
 // ---------------------------------------------------------------- config
-var API_KEY = '6cb37daf7f5c4feda39bbf640e892074';
-var API = 'https://api.at.govt.nz';
+// Everything city-specific lives here. Both operators publish GTFS-RT occupancy, but
+// the endpoints, envelopes and fleets differ, so each city supplies its own adapters.
+var CITIES = {
+  akl: {
+    id: 'akl',
+    name: 'Auckland',
+    agency: 'Auckland Transport',
+    subject: 'public transport',   // buses and trains are both covered here
+    api: 'https://api.at.govt.nz',
+    key: '6cb37daf7f5c4feda39bbf640e892074',
+    header: 'Ocp-Apim-Subscription-Key',
+    routesPath: '/gtfs/v3/routes',
+    vehiclesPath: '/realtime/legacy/vehiclelocations',
 
-var PROFILES = {
-  bus:   { name:'Bus',           plural:'Buses',          seated:47,  standing:31  },
-  dd:    { name:'Double-decker', plural:'Double-deckers',  seated:85,  standing:25  },
-  train: { name:'Train',         plural:'Trains',          seated:230, standing:143 }
+    // AT wraps everything in a `response` object; routes are JSON:API.
+    parseRoutes: function (d) {
+      var idx = {};
+      (d.data || []).forEach(function (r) {
+        var a = r.attributes || {};
+        idx[String(a.route_id)] = {
+          name: a.route_short_name || a.route_long_name || a.route_id,
+          type: a.route_type, agency: a.agency_id
+        };
+      });
+      return idx;
+    },
+    parseVehicles: function (d) { return ((d && d.response) || {}).entity || []; },
+    parseStamp: function (d) {
+      var h = ((d && d.response) || {}).header || {};
+      return new Date((h.timestamp || Date.now() / 1000) * 1000);
+    },
+
+    profiles: {
+      bus:   { name:'Bus',           plural:'Buses',          seated:47,  standing:31  },
+      dd:    { name:'Double-decker', plural:'Double-deckers', seated:85,  standing:25  },
+      train: { name:'Train',         plural:'Trains',         seated:230, standing:143 }
+    },
+    ddPattern: /^(HE05|NB50|NB53|NB54)/,      // double-deckers by fleet number
+    ddRoutes:  { NX1:1, NX2:1, WX1:1 },       // ...and routes run entirely by them
+    railType: 2,                              // rail reports occupancy here
+    excludeType: 4,                           // ferries do not
+    excludeLabel: 'Ferries',
+
+    // AT labels each vehicle with an operator prefix: 'NB4212' -> NZ Bus.
+    operatorOf: function (v, route) {
+      var m = /^([A-Z]+)/.exec(v.label || '');
+      if (!m) return 'Unknown';
+      var o = { RT:'Ritchies', NB:'NZ Bus', GB:'Go Bus', TR:'Tranzit', HE:'Howick & Eastern',
+                WB:'Waiheke Bus Co', AMP:'AT Metro rail', AM:'AT Metro rail' };
+      return o[m[1]] || o[m[1].slice(0, 2)] || m[1];
+    },
+    serviceLow: 60, serviceFull: 250
+  },
+
+  wlg: {
+    id: 'wlg',
+    name: 'Wellington',
+    agency: 'Metlink',
+    subject: 'buses',              // Metlink publishes no occupancy for trains
+    api: 'https://api.opendata.metlink.org.nz/v1',
+    key: '3EM2Yfa0zs8kvRUfHBgNlOyz9mObVnNH7Sa5J4f0',
+    header: 'x-api-key',
+    routesPath: '/gtfs/routes',
+    vehiclesPath: '/gtfs-rt/vehiclepositions',
+
+    // Metlink returns a bare array of routes and an unwrapped GTFS-RT envelope.
+    parseRoutes: function (d) {
+      var idx = {};
+      (d || []).forEach(function (a) {
+        idx[String(a.route_id)] = {
+          name: a.route_short_name || a.route_long_name || a.route_id,
+          type: a.route_type, agency: a.agency_id
+        };
+      });
+      return idx;
+    },
+    parseVehicles: function (d) { return (d && d.entity) || []; },
+    parseStamp: function (d) {
+      var h = (d && d.header) || {};
+      return new Date((h.timestamp || Date.now() / 1000) * 1000);
+    },
+
+    // Metlink publishes no vehicle labels, so double-deckers cannot be identified by
+    // fleet number the way they can in Auckland. Until a route list is confirmed,
+    // every bus is treated as a standard single-decker.
+    profiles: {
+      bus:   { name:'Bus',           plural:'Buses',          seated:45,  standing:30 },
+      dd:    { name:'Double-decker', plural:'Double-deckers', seated:85,  standing:25 },
+      train: { name:'Train',         plural:'Trains',         seated:148, standing:80 }
+    },
+    ddPattern: null,                          // Metlink publishes no vehicle labels
+    ddRoutes:  { '1':1, '3':1, '7':1, '23':1, '83':1 },   // ...so routes are the only way to spot them
+    railType: null,          // Wellington rail publishes no occupancy at all
+    excludeType: 2,          // ...so trains are excluded, as ferries are in Auckland
+    excludeLabel: 'Trains',
+
+    // No labels here: the operator comes from the route's agency instead.
+    operatorOf: function (v, route) {
+      var o = { NBM:'NZ Bus', TZM:'Tranzurban', MNM:'Mana', UZM:'Uzabus',
+                RAIL:'Metlink Rail', WCCL:'Wellington Cable Car' };
+      var a = route && route.agency;
+      return a ? (o[a] || a) : 'Unknown';
+    },
+    serviceLow: 20, serviceFull: 80
+  }
 };
-var DD_PATTERN = /^(HE05|NB50|NB53|NB54)/;
-// Routes operated entirely by double-deckers, whatever the fleet number says.
-var DD_ROUTES = { NX1:1, NX2:1, WX1:1 };
+
+// Active city. Remembered between visits, and overridable with ?city=wlg.
+var CITY;
+CITY = (function () {
+  var m = /[?&#]city=(\w+)/.exec(location.search + location.hash);
+  var want = m && m[1];
+  try { want = want || localStorage.getItem('city'); } catch (e) {}
+  return CITIES[want] || CITIES.akl;
+})();
+
+var PROFILES;
+PROFILES = CITY.profiles;
 
 // AT's automatic passenger counters switch category at 40% and 90% of SEATED
 // capacity (Propellerhead, who built the feature for AT). Each category is therefore
@@ -214,11 +323,6 @@ var CATEGORIES = [
     band:'at capacity' }
 ];
 
-var OPERATORS = {
-  RT:'Ritchies', NB:'NZ Bus', GB:'Go Bus', TR:'Tranzit', HE:'Howick & Eastern',
-  WB:'Waiheke Bus Co', AMP:'AT Metro rail', AM:'AT Metro rail'
-};
-
 function band(prof, status) {
   var c = CATEGORIES[status];
   if (!c) return [0, 0];
@@ -233,17 +337,17 @@ function band(prof, status) {
 // one reporting it at 8am, so the model should not pretend otherwise. Using the
 // vehicle count rather than the reported occupancy mix also avoids compressing the
 // busy and quiet halves of a peak toward each other.
-var SERVICE_LOW  = 60;    // at or below this many vehicles: deep night
-var SERVICE_FULL = 250;   // at or above this: normal service, no discount
-var POS_NIGHT    = 0.15;  // position within the band overnight
-var POS_NORMAL   = 0.30;  // position within the band the rest of the time
+// Auckland and Wellington run very different sized fleets, so the "how much service
+// is out" thresholds come from the city config; the positions themselves do not.
+var POS_NIGHT  = 0.15;   // position within the band overnight
+var POS_NORMAL = 0.30;   // position within the band the rest of the time
 
 var INSERVICE = null;   // vehicles in service for the current snapshot
 var POS = POS_NORMAL;   // resulting position within every band, 0..1
 
 function positionFor(count) {
   if (count == null) return POS_NORMAL;
-  var t = (count - SERVICE_LOW) / (SERVICE_FULL - SERVICE_LOW);
+  var t = (count - CITY.serviceLow) / (CITY.serviceFull - CITY.serviceLow);
   t = Math.max(0, Math.min(1, t));
   return POS_NIGHT + t * (POS_NORMAL - POS_NIGHT);
 }
@@ -262,40 +366,33 @@ function variance(prof, status) {
   return (a*a + m*m + c*c - a*m - a*c - m*c) / 18;
 }
 
-function operatorOf(label) {
-  var m = /^([A-Z]+)/.exec(label);
-  if (!m) return 'Unknown';
-  return OPERATORS[m[1]] || OPERATORS[m[1].slice(0, 2)] || m[1];
-}
 
 // ---------------------------------------------------------------- state
 var state = { modes:{}, ops:{}, occ:{}, search:'' };   // empty object = no filter on that facet
 var sort = { k:'people', dir:-1 };
 var expanded = {};
 var VEHICLES = [];   // flat list, rebuilt each refresh
-var META = { ferriesRunning:0, noOccupancy:0, stamp:new Date() };
+var META = { excluded:0, noOccupancy:0, stamp:new Date() };
 
 // ---------------------------------------------------------------- fetching
 function get(path) {
-  return fetch(API + path, { headers:{ 'Ocp-Apim-Subscription-Key':API_KEY } })
+  var h = {}; h[CITY.header] = CITY.key; h.accept = 'application/json';
+  return fetch(CITY.api + path, { headers: h })
     .then(function (r) { if (!r.ok) throw new Error(path + ' returned ' + r.status); return r.json(); });
 }
 
-var routeIndex = null;
+var routeIndex = {};   // cached per city
 function loadRoutes() {
-  if (routeIndex) return Promise.resolve(routeIndex);
+  if (routeIndex[CITY.id]) return Promise.resolve(routeIndex[CITY.id]);
+  var slot = 'routes_' + CITY.id;
   try {
-    var c = JSON.parse(localStorage.getItem('at_routes') || 'null');
-    if (c && Date.now() - c.at < 864e5) { routeIndex = c.idx; return Promise.resolve(routeIndex); }
+    var c = JSON.parse(localStorage.getItem(slot) || 'null');
+    if (c && Date.now() - c.at < 864e5) { routeIndex[CITY.id] = c.idx; return Promise.resolve(c.idx); }
   } catch (e) {}
-  return get('/gtfs/v3/routes').then(function (d) {
-    var idx = {};
-    (d.data || []).forEach(function (r) {
-      var a = r.attributes || {};
-      idx[a.route_id] = { name:a.route_short_name || a.route_long_name || a.route_id, type:a.route_type };
-    });
-    routeIndex = idx;
-    try { localStorage.setItem('at_routes', JSON.stringify({ at:Date.now(), idx:idx })); } catch (e) {}
+  return get(CITY.routesPath).then(function (d) {
+    var idx = CITY.parseRoutes(d);
+    routeIndex[CITY.id] = idx;
+    try { localStorage.setItem(slot, JSON.stringify({ at:Date.now(), idx:idx })); } catch (e) {}
     return idx;
   });
 }
@@ -303,24 +400,26 @@ function loadRoutes() {
 // ---------------------------------------------------------------- build flat vehicle list
 function build(entities, routes) {
   var list = [];
-  META.ferriesRunning = 0; META.noOccupancy = 0;
+  META.excluded = 0; META.noOccupancy = 0;
 
   entities.forEach(function (ent) {
     var v = ent.vehicle;
     if (!v || !v.trip) return;
-    var route = routes[v.trip.route_id];
-    if (route && route.type === 4) { META.ferriesRunning++; return; }
+    var route = routes[String(v.trip.route_id)];
+    // The mode this city's operator does not report occupancy for at all.
+    if (route && CITY.excludeType != null && route.type === CITY.excludeType) { META.excluded++; return; }
     if (typeof v.occupancy_status !== 'number') { META.noOccupancy++; return; }
 
     var label = ((v.vehicle && v.vehicle.label) || '').replace(/\s+/g, '');
     var rname = route ? route.name : (v.trip.route_id || 'Unknown');
-    var mode = (route && route.type === 2) ? 'train'
-             : (DD_ROUTES[String(rname).toUpperCase()] || DD_PATTERN.test(label)) ? 'dd'
-             : 'bus';
+    var isDD = (CITY.ddRoutes && CITY.ddRoutes[String(rname).toUpperCase()]) ||
+               (CITY.ddPattern && CITY.ddPattern.test(label));
+    var mode = (route && CITY.railType != null && route.type === CITY.railType) ? 'train'
+             : isDD ? 'dd' : 'bus';
     list.push({
       id: (v.vehicle && v.vehicle.id) || '',
-      label: label || '—',
-      operator: operatorOf(label),
+      label: label || (v.vehicle && v.vehicle.id) || '—',
+      operator: CITY.operatorOf({ label: label, id: (v.vehicle && v.vehicle.id) || '' }, route),
       mode: mode,
       route: rname,
       direction: v.trip.direction_id,
@@ -419,7 +518,7 @@ function renderAll() {
   document.getElementById('headline').innerHTML =
     'About <span class="n">' + n(people) + '</span> ' +
     (Math.round(people) === 1 ? 'person is' : 'people are') +
-    (isFiltered ? ' on the selected services.' : ' on Auckland public transport right now.');
+    (isFiltered ? ' on the selected services.' : ' on ' + CITY.name + ' ' + CITY.subject + ' right now.');
   var sd = Math.sqrt(vs.reduce(function (a, v) { return a + v.vari; }, 0));
   var half = 1.645 * sd;                                  // 90% interval
   document.getElementById('sub').innerHTML =
@@ -542,6 +641,10 @@ function cell(prof, i) {
          (lo === hi ? '' : ' <span class="muted">(' + lo + '–' + hi + ')</span>');
 }
 function renderModel() {
+  ['bus','dd','train'].forEach(function (k) {
+    var th = document.getElementById('mh-' + k), pr = PROFILES[k];
+    if (th) th.textContent = pr.name + ' (' + pr.seated + '+' + pr.standing + ')';
+  });
   var tb = document.querySelector('#t-model tbody'); tb.innerHTML = '';
   CATEGORIES.forEach(function (c, i) {
     tb.appendChild(el('tr', null,
@@ -570,30 +673,83 @@ function csv() {
 }
 
 // ---------------------------------------------------------------- run
+var LOADGEN = 0;
 function load() {
   document.getElementById('err').innerHTML = '';
+  // Switching city mid-request must not let the previous city's response land after it.
+  var gen = ++LOADGEN, city = CITY;
   return loadRoutes().then(function (routes) {
-    return get('/realtime/legacy/vehiclelocations').then(function (d) {
-      var res = (d && d.response) || {};
-      META.stamp = new Date(((res.header && res.header.timestamp) || Date.now() / 1000) * 1000);
-      build(res.entity || [], routes);
+    if (gen !== LOADGEN) return;
+    return get(city.vehiclesPath).then(function (d) {
+      if (gen !== LOADGEN) return;
+      META.stamp = city.parseStamp(d);
+      build(city.parseVehicles(d), routes);
       renderAll();
       renderModel();
+
+      document.getElementById('apcnote').textContent =
+        city.agency + ' vehicles carry automatic passenger counters and publish a broad live occupancy ' +
+        'category. Its counters switch category at 40% and 90% of seated capacity, so each category ' +
+        'corresponds to a known band of real loads. This page combines those bands with vehicle ' +
+        'capacities to estimate how many people are aboard right now. It is an estimate, not a count.';
+
+      document.getElementById('capnote').textContent = city.id === 'akl'
+        ? 'Buses are assumed to be XLBs (47 seated, 78 total). Double-deckers, identified by fleet number '
+        + '(HE05xx, NB50xx, NB53xx, NB54xx) or by running on a route operated entirely by double-deckers '
+        + '(NX1, NX2, WX1), are assumed to seat 85 with 110 total. Trains are assumed to be 3-car units: '
+        + '230 seated, 143 standing.'
+        : 'Buses are assumed to seat 45 with 75 total. Metlink publishes no vehicle labels, so '
+        + 'double-deckers cannot be identified by fleet number the way they can in Auckland; routes 1, 3, '
+        + '7, 23 and 83 are treated as double-decker throughout, assumed to seat 85 with 110 total.';
+
       document.getElementById('fitnote').textContent = INSERVICE == null ? '' :
         INSERVICE + ' vehicles in service' +
         (POS < POS_NORMAL ? ' — reduced overnight service, so each vehicle is placed lower, at the '
                           : ' — normal service, so each vehicle is placed at the ') +
         (100 * POS).toFixed(0) + 'th percentile of its band.';
-      document.getElementById('ferrynote').textContent = META.ferriesRunning
-        ? 'Ferries are excluded: ' + META.ferriesRunning + ' were sailing, but they do not report occupancy.'
-        : 'Ferries are excluded because they do not report occupancy.';
+
+      document.getElementById('ferrynote').textContent = META.excluded
+        ? city.excludeLabel + ' are excluded: ' + META.excluded + ' were running, but ' +
+          city.agency + ' does not publish occupancy for them.'
+        : city.excludeLabel + ' are excluded because ' + city.agency +
+          ' does not publish occupancy for them.';
+
       document.getElementById('stamp').textContent =
         'Feed timestamp ' + META.stamp.toLocaleTimeString('en-NZ') +
         (META.noOccupancy ? ' · ' + META.noOccupancy + ' in-service vehicles reported no occupancy' : '');
     });
   }).catch(function (e) {
-    document.getElementById('err').innerHTML = '<div class="err">Could not load the feed: ' + e.message + '</div>';
+    if (gen !== LOADGEN) return;
+    document.getElementById('err').innerHTML =
+      '<div class="err">Could not load the ' + city.name + ' feed: ' + e.message + '</div>';
   });
+}
+
+function renderCitySwitch() {
+  var box = document.getElementById('cityswitch');
+  box.innerHTML = '';
+  Object.keys(CITIES).forEach(function (k) {
+    var c = CITIES[k];
+    var b = el('button', 'chip' + (c.id === CITY.id ? ' on' : ''), c.name);
+    b.addEventListener('click', function () { switchCity(c.id); });
+    box.appendChild(b);
+  });
+  document.getElementById('title').textContent = CITY.name + ' Transit Ridership';
+  document.title = CITY.name + ' Transit Ridership';
+}
+
+function switchCity(id) {
+  if (!CITIES[id] || id === CITY.id) return;
+  CITY = CITIES[id];
+  PROFILES = CITY.profiles;
+  try { localStorage.setItem('city', id); } catch (e) {}
+  // Operators, routes and modes all differ between cities, so start from a clean slate.
+  state = { modes:{}, ops:{}, occ:{}, search:'' };
+  expanded = {};
+  document.getElementById('f-search').value = '';
+  VEHICLES = []; INSERVICE = null;
+  renderCitySwitch();
+  load();
 }
 
 document.getElementById('refresh').addEventListener('click', load);
@@ -614,6 +770,7 @@ document.querySelectorAll('#t-route th.s').forEach(function (th) {
   });
 });
 
+renderCitySwitch();
 renderModel();
 load();
 setInterval(load, 30000);
