@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Auckland Transit Ridership</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<style>
+  :root {
+    --bg:#fbfaf8; --fg:#1a1a1a; --muted:#6b6b6b; --line:#e2ded8; --card:#fff;
+    --accent:#14639e; --hover:#f2efea;
+    --c0:#4575b4; --c1:#91bfdb; --c2:#fdae61; --c3:#f46d43; --c4:#d73027; --c5:#a50026; --c6:#4d004b;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg:#16181a; --fg:#ececec; --muted:#9a9a9a; --line:#2e3236; --card:#1e2124;
+    --accent:#6bb3e8; --hover:#24282c;
+  }}
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--fg); margin:0;
+         font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+  .wrap { max-width:940px; margin:0 auto; padding:36px 22px 80px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:.03em; text-transform:uppercase; color:var(--muted); margin:0 0 24px; }
+  .headline { font-size:clamp(27px,6vw,42px); line-height:1.15; font-weight:600; letter-spacing:-.02em; margin:0 0 6px; }
+  .headline .n { color:var(--accent); font-variant-numeric:tabular-nums; }
+  .sub { color:var(--muted); margin:0 0 26px; }
+  h2 { font-size:12.5px; font-weight:600; text-transform:uppercase; letter-spacing:.05em;
+       color:var(--muted); margin:34px 0 12px; }
+
+  /* filters */
+  .filters { border:1px solid var(--line); background:var(--card); border-radius:10px; padding:14px 16px; margin-bottom:26px; }
+  .frow { display:flex; flex-wrap:wrap; gap:7px; align-items:center; margin-bottom:9px; }
+  .frow:last-child { margin-bottom:0; }
+  .flabel { font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted);
+            width:74px; flex:none; font-weight:600; }
+  .chip { font:inherit; font-size:13px; color:var(--fg); background:transparent; border:1px solid var(--line);
+          border-radius:999px; padding:3px 11px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+  .chip:hover { border-color:var(--muted); }
+  .chip.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .chip .dot { width:8px; height:8px; border-radius:50%; flex:none; }
+  .chip .ct { opacity:.65; font-variant-numeric:tabular-nums; }
+  input[type=search] { font:inherit; font-size:13px; color:var(--fg); background:var(--bg);
+          border:1px solid var(--line); border-radius:7px; padding:4px 10px; min-width:180px; }
+  .clear { margin-left:auto; font-size:13px; color:var(--accent); background:none; border:none; cursor:pointer; padding:0; }
+
+  /* cards */
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:11px; margin-bottom:8px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:13px 15px; }
+  .card .k { font-size:11.5px; text-transform:uppercase; letter-spacing:.045em; color:var(--muted); }
+  .card .v { font-size:24px; font-weight:600; font-variant-numeric:tabular-nums; margin-top:2px; }
+  .card .d { font-size:12.5px; color:var(--muted); }
+
+  /* tables */
+  .scroll { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  th { text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted);
+       font-weight:600; padding:0 10px 7px 0; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th.s { cursor:pointer; user-select:none; }
+  th.s:hover { color:var(--fg); }
+  th .arr { opacity:.45; font-size:10px; }
+  td { padding:7px 10px 7px 0; border-bottom:1px solid var(--line); }
+  td.num, th.num { text-align:right; padding-right:0; }
+  tr.exp { cursor:pointer; }
+  tr.exp:hover > td { background:var(--hover); }
+  .tw { display:inline-block; width:9px; text-align:center; color:var(--muted); margin-right:6px; font-size:10px; }
+  .swatch { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:7px; }
+  .bar { height:5px; border-radius:3px; background:var(--line); overflow:hidden; margin-top:5px; max-width:260px; }
+  .bar > i { display:block; height:100%; }
+  .sub-t { background:var(--hover); }
+  .sub-t table { font-size:13.5px; }
+  .sub-t td { border-bottom:1px solid var(--line); padding:5px 10px 5px 0; }
+  .sub-t td:first-child { padding-left:26px; }
+  .pill { display:inline-block; font-size:11.5px; padding:1px 8px; border-radius:999px; color:#fff; white-space:nowrap; }
+  .muted { color:var(--muted); }
+  .empty { color:var(--muted); padding:16px 0; }
+
+  footer { margin-top:44px; padding-top:20px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+  footer p { margin:0 0 10px; }
+  button.btn { font:inherit; font-size:13.5px; color:var(--fg); background:var(--card); border:1px solid var(--line);
+               border-radius:7px; padding:5px 12px; cursor:pointer; }
+  button.btn:hover { border-color:var(--muted); }
+  .err { background:#d73027; color:#fff; padding:11px 14px; border-radius:8px; margin-bottom:20px; }
+  details summary { cursor:pointer; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Auckland Transit Ridership</h1>
+<div id="err"></div>
+
+<p class="headline" id="headline">Loading&hellip;</p>
+<p class="sub" id="sub">Reading the Auckland Transport realtime feed.</p>
+
+<div class="filters" id="filters">
+  <div class="frow"><span class="flabel">Mode</span><span id="f-mode"></span></div>
+  <div class="frow"><span class="flabel">Operator</span><span id="f-op"></span></div>
+  <div class="frow"><span class="flabel">Occupancy</span><span id="f-occ"></span></div>
+  <div class="frow"><span class="flabel">Route</span>
+    <input type="search" id="f-search" placeholder="Filter by route, e.g. NX1">
+    <button class="clear" id="f-clear">Reset filters</button>
+  </div>
+</div>
+
+<div class="grid" id="cards"></div>
+<p class="sub muted" id="filternote" style="margin-top:10px"></p>
+<p class="sub muted" id="bounds" style="margin-top:-16px;font-size:13px"></p>
+
+<h2>By occupancy</h2>
+<div class="scroll"><table id="t-occ">
+  <thead><tr><th>Category</th><th class="num">Vehicles</th><th class="num">Est. people</th><th class="num">Avg / vehicle</th></tr></thead>
+  <tbody></tbody></table></div>
+
+<h2>By operator</h2>
+<div class="scroll"><table id="t-op">
+  <thead><tr><th>Operator</th><th class="num">Vehicles</th><th class="num">Est. people</th><th class="num">Avg / vehicle</th></tr></thead>
+  <tbody></tbody></table></div>
+
+<h2>By route <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— click a row for individual vehicles</span></h2>
+<div class="scroll"><table id="t-route">
+  <thead><tr>
+    <th class="s" data-k="name">Route <span class="arr"></span></th>
+    <th>Modes</th>
+    <th class="s num" data-k="vehicles">Vehicles <span class="arr"></span></th>
+    <th class="s num" data-k="people">Est. people <span class="arr"></span></th>
+    <th class="s num" data-k="avg">Avg <span class="arr"></span></th>
+  </tr></thead>
+  <tbody></tbody></table></div>
+<p id="routemore" class="muted" style="font-size:13px"></p>
+
+<footer>
+  <p>
+    <button class="btn" id="refresh">Refresh</button>
+    <button class="btn" id="csv">Download vehicle CSV</button>
+    <span id="stamp"></span>
+  </p>
+  <p id="fitnote"></p>
+  <p>
+  </p>
+  <details>
+    <summary>About this estimate</summary>
+    <div style="margin-top:10px">
+    <p>Auckland Transport buses and trains carry automatic passenger counters and publish a broad live
+    occupancy category. AT's counters switch category at 40% and 90% of seated capacity, so each category
+    corresponds to a known band of real loads. This page combines those bands with vehicle capacities to
+    estimate how many people are aboard right now. It is an estimate, not a count.</p>
+    <p>Where a vehicle sits inside its band is not guessed. Because the thresholds are known, the counts in
+    each category are an interval-censored sample of the load distribution across the network, so a gamma
+    distribution is fitted to them by maximum likelihood on every refresh, and each vehicle is scored at the
+    conditional mean of its own band. The fit adapts on its own: late at night, when most vehicles report
+    empty, it places the rest low in their bands; at peak it pushes them up. When too few categories are
+    reported to identify a fit, the page falls back to fixed percentiles (30th for the lightly-loaded
+    categories) and says so below.</p>
+    <div class="scroll"><table id="t-model">
+      <thead><tr><th>Category</th><th>Band</th><th class="num">Bus (47+31)</th><th class="num">Double-decker (85+25)</th><th class="num">Train (230+143)</th></tr></thead>
+      <tbody></tbody></table></div>
+    <p style="margin-top:12px">Buses are assumed to be XLBs (47 seated, 78 total). Double-deckers, identified by
+    fleet number (HE05xx, NB50xx, NB53xx, NB54xx) or by running on a route operated entirely by
+    double-deckers (NX1, NX2, WX1), are assumed to seat 85 with 110 total. Trains are assumed
+    to be 3-car units: 230 seated, 143 standing.</p>
+    <p>The range is a 90% interval. Each vehicle's true load is modelled as a triangular
+    distribution across its category band, and the variances are summed across vehicles — so
+    the aggregate is much tighter than the raw bounds, because independent errors cancel.
+    It captures uncertainty <em>within</em> the reported categories only. It does not cover
+    systematic error: the capacity assumptions, double-decker identification by fleet number,
+    or the accuracy of the counters themselves. Those shift the whole figure together and are
+    not something this page can measure.</p>
+    <p id="ferrynote"></p>
+    <p>Nothing is stored — this is a live snapshot each time you load or refresh.</p>
+    </div>
+  </details>
+</footer>
+
+</div>
+<script>
+// ---------------------------------------------------------------- config
+var API_KEY = '6cb37daf7f5c4feda39bbf640e892074';
+var API = 'https://api.at.govt.nz';
+
+var PROFILES = {
+  bus:   { name:'Bus',           plural:'Buses',          seated:47,  standing:31  },
+  dd:    { name:'Double-decker', plural:'Double-deckers',  seated:85,  standing:25  },
+  train: { name:'Train',         plural:'Trains',          seated:230, standing:143 }
+};
+var DD_PATTERN = /^(HE05|NB50|NB53|NB54)/;
+// Routes operated entirely by double-deckers, whatever the fleet number says.
+var DD_ROUTES = { NX1:1, NX2:1, WX1:1 };
+
+// AT's automatic passenger counters switch category at 40% and 90% of SEATED
+// capacity (Propellerhead, who built the feature for AT). Each category is therefore
+// a known band of real loads; lo/hi return that band in people for a given profile.
+// `p` picks a point within the band. Loads are right-skewed — at any moment far more
+// vehicles sit near the bottom of a band than the top — so every category sits below
+// its midpoint, and the lightly-loaded ones furthest below. These are deliberately
+// conservative: where the band is wide and the evidence thin, undercount.
+// EMPTY is an absolute passenger count, not a share of seats: GTFS defines it as "no
+// passengers or very few", which does not scale with vehicle size. Treating it as 5%
+// of seats implied 12 people aboard an "empty" train.
+var CATEGORIES = [
+  { label:'Empty',                colour:'var(--c0)', p:0.4,
+    lo:function(S,T){ return 0; },          hi:function(S,T){ return 3; },
+    band:'0 – 3 passengers' },
+  { label:'Many seats available', colour:'var(--c1)', p:0.3,
+    lo:function(S,T){ return 3; },          hi:function(S,T){ return 0.40*S; },
+    band:'3 passengers – 40% of seats' },
+  { label:'Few seats available',  colour:'var(--c2)', p:0.35,
+    lo:function(S,T){ return 0.40*S; },     hi:function(S,T){ return 0.90*S; },
+    band:'40 – 90% of seats' },
+  { label:'Standing room only',   colour:'var(--c3)', p:0.35,
+    lo:function(S,T){ return 0.90*S; },     hi:function(S,T){ return S + 0.5*T; },
+    band:'90% of seats – half standing' },
+  { label:'Crushed standing',     colour:'var(--c4)', p:0.45,
+    lo:function(S,T){ return S + 0.5*T; },  hi:function(S,T){ return S + 0.9*T; },
+    band:'50 – 90% of standing' },
+  { label:'Full',                 colour:'var(--c5)', p:0.45,
+    lo:function(S,T){ return S + 0.9*T; },  hi:function(S,T){ return S + T; },
+    band:'90 – 100% of standing' },
+  { label:'Not accepting',        colour:'var(--c6)', p:0.5,
+    lo:function(S,T){ return S + T; },      hi:function(S,T){ return S + T; },
+    band:'at capacity' }
+];
+
+var OPERATORS = {
+  RT:'Ritchies', NB:'NZ Bus', GB:'Go Bus', TR:'Tranzit', HE:'Howick & Eastern',
+  WB:'Waiheke Bus Co', AMP:'AT Metro rail', AM:'AT Metro rail'
+};
+
+function band(prof, status) {
+  var c = CATEGORIES[status];
+  if (!c) return [0, 0];
+  return [c.lo(prof.seated, prof.standing), c.hi(prof.seated, prof.standing)];
+}
+
+// ---- fallback estimator: fixed percentile within the band -------------------
+// Used only when the snapshot is too sparse to fit a demand distribution.
+function estimateFixed(prof, status) {
+  var b = band(prof, status);
+  return b[0] + CATEGORIES[status].p * (b[1] - b[0]);
+}
+// Triangular over the band, mode placed so the mean equals the point estimate.
+function varianceFixed(prof, status) {
+  var b = band(prof, status), a = b[0], c = b[1];
+  if (c <= a) return 0;
+  var m = 3 * estimateFixed(prof, status) - a - c;
+  return (a*a + m*m + c*c - a*m - a*c - m*c) / 18;
+}
+
+// ---- gamma distribution helpers --------------------------------------------
+function lgamma(z) {
+  var g = [676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059,
+           12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+  if (z < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * z)) - lgamma(1 - z);
+  z -= 1;
+  var x = 0.99999999999980993;
+  for (var i = 0; i < 8; i++) x += g[i] / (z + i + 1);
+  var t = z + 7.5;
+  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
+}
+// Regularised lower incomplete gamma P(a, x).
+function gammaP(a, x) {
+  if (!(x > 0)) return 0;
+  if (x < a + 1) {
+    var term = 1 / a, sum = term, n = 0;
+    while (n < 500) {
+      n++; term *= x / (a + n); sum += term;
+      if (Math.abs(term) < Math.abs(sum) * 1e-14) break;
+    }
+    return sum * Math.exp(-x + a * Math.log(x) - lgamma(a));
+  }
+  var tiny = 1e-300, b = x + 1 - a, c = 1 / tiny, d = 1 / b, h = d;
+  for (var i = 1; i < 500; i++) {
+    var an = -i * (i - a); b += 2;
+    d = an * d + b; if (Math.abs(d) < tiny) d = tiny;
+    c = b + an / c;  if (Math.abs(c) < tiny) c = tiny;
+    d = 1 / d;
+    var de = d * c; h *= de;
+    if (Math.abs(de - 1) < 1e-14) break;
+  }
+  return 1 - Math.exp(-x + a * Math.log(x) - lgamma(a)) * h;
+}
+
+// ---- fit a demand distribution to the observed category mix -----------------
+// AT's thresholds give exact bin boundaries, so the counts in each category are an
+// interval-censored sample of the load distribution. Fit Gamma(k, theta) to them by
+// maximum likelihood and the within-band position stops being a guess: at 9pm the fit
+// piles mass near zero and places vehicles low in their bands; at peak it pushes them
+// up. Load is normalised by seated capacity so buses, double-deckers and trains share
+// one fit — which also keeps the 13 trains from needing their own thin sample.
+function fitDemand(list) {
+  var seen = {}, cells = {};
+  list.forEach(function (v) {
+    seen[v.occ] = 1;
+    var key = v.mode + '|' + v.occ;
+    if (!cells[key]) {
+      var prof = PROFILES[v.mode], b = band(prof, v.occ);
+      cells[key] = { n: 0, lo: b[0] / prof.seated, hi: b[1] / prof.seated };
+    }
+    cells[key].n++;
+  });
+  // Too sparse to identify two parameters: fall back to the fixed percentiles.
+  if (list.length < 30 || Object.keys(seen).length < 3) return null;
+
+  var arr = Object.keys(cells).map(function (k) { return cells[k]; })
+                              .filter(function (c) { return c.hi > c.lo; });
+  var best = null;
+  for (var k = 0.05; k <= 6; k *= 1.08) {
+    for (var th = 0.004; th <= 3; th *= 1.08) {
+      var ll = 0, ok = true;
+      for (var i = 0; i < arr.length; i++) {
+        var pr = gammaP(k, arr[i].hi / th) - gammaP(k, arr[i].lo / th);
+        if (!(pr > 1e-12)) { ok = false; break; }
+        ll += arr[i].n * Math.log(pr);
+      }
+      if (ok && (best === null || ll > best.ll)) best = { ll: ll, k: k, th: th };
+    }
+  }
+  return best;
+}
+
+// Conditional mean and variance of load within a band, under the fitted distribution.
+function fittedMoments(prof, status, fit) {
+  var b = band(prof, status), S = prof.seated;
+  var lo = b[0] / S, hi = b[1] / S;
+  if (hi <= lo) return { mean: b[0], vari: 0 };
+  var k = fit.k, th = fit.th;
+  var pr = gammaP(k, hi / th) - gammaP(k, lo / th);
+  if (!(pr > 1e-9)) return null;
+  var m1 = k * th * (gammaP(k + 1, hi / th) - gammaP(k + 1, lo / th)) / pr;
+  var m2 = k * (k + 1) * th * th * (gammaP(k + 2, hi / th) - gammaP(k + 2, lo / th)) / pr;
+  m1 = Math.min(hi, Math.max(lo, m1));
+  return { mean: m1 * S, vari: Math.max(0, m2 - m1 * m1) * S * S };
+}
+
+// Active estimator: fitted when FIT is available, fixed percentile otherwise.
+var FIT = null;
+function estimate(prof, status) {
+  if (FIT) { var m = fittedMoments(prof, status, FIT); if (m) return m.mean; }
+  return estimateFixed(prof, status);
+}
+function variance(prof, status) {
+  if (FIT) { var m = fittedMoments(prof, status, FIT); if (m) return m.vari; }
+  return varianceFixed(prof, status);
+}
+function operatorOf(label) {
+  var m = /^([A-Z]+)/.exec(label);
+  if (!m) return 'Unknown';
+  return OPERATORS[m[1]] || OPERATORS[m[1].slice(0, 2)] || m[1];
+}
+
+// ---------------------------------------------------------------- state
+var state = { modes:{}, ops:{}, occ:{}, search:'' };   // empty object = no filter on that facet
+var sort = { k:'people', dir:-1 };
+var expanded = {};
+var VEHICLES = [];   // flat list, rebuilt each refresh
+var META = { ferriesRunning:0, noOccupancy:0, stamp:new Date() };
+
+// ---------------------------------------------------------------- fetching
+function get(path) {
+  return fetch(API + path, { headers:{ 'Ocp-Apim-Subscription-Key':API_KEY } })
+    .then(function (r) { if (!r.ok) throw new Error(path + ' returned ' + r.status); return r.json(); });
+}
+
+var routeIndex = null;
+function loadRoutes() {
+  if (routeIndex) return Promise.resolve(routeIndex);
+  try {
+    var c = JSON.parse(localStorage.getItem('at_routes') || 'null');
+    if (c && Date.now() - c.at < 864e5) { routeIndex = c.idx; return Promise.resolve(routeIndex); }
+  } catch (e) {}
+  return get('/gtfs/v3/routes').then(function (d) {
+    var idx = {};
+    (d.data || []).forEach(function (r) {
+      var a = r.attributes || {};
+      idx[a.route_id] = { name:a.route_short_name || a.route_long_name || a.route_id, type:a.route_type };
+    });
+    routeIndex = idx;
+    try { localStorage.setItem('at_routes', JSON.stringify({ at:Date.now(), idx:idx })); } catch (e) {}
+    return idx;
+  });
+}
+
+// ---------------------------------------------------------------- build flat vehicle list
+function build(entities, routes) {
+  var list = [];
+  META.ferriesRunning = 0; META.noOccupancy = 0;
+
+  entities.forEach(function (ent) {
+    var v = ent.vehicle;
+    if (!v || !v.trip) return;
+    var route = routes[v.trip.route_id];
+    if (route && route.type === 4) { META.ferriesRunning++; return; }
+    if (typeof v.occupancy_status !== 'number') { META.noOccupancy++; return; }
+
+    var label = ((v.vehicle && v.vehicle.label) || '').replace(/\s+/g, '');
+    var rname = route ? route.name : (v.trip.route_id || 'Unknown');
+    var mode = (route && route.type === 2) ? 'train'
+             : (DD_ROUTES[String(rname).toUpperCase()] || DD_PATTERN.test(label)) ? 'dd'
+             : 'bus';
+    list.push({
+      id: (v.vehicle && v.vehicle.id) || '',
+      label: label || '—',
+      operator: operatorOf(label),
+      mode: mode,
+      route: rname,
+      direction: v.trip.direction_id,
+      occ: v.occupancy_status,
+      speed: v.position && v.position.speed != null ? v.position.speed * 3.6 : null,
+      age: v.timestamp ? Math.max(0, Math.round(Date.now() / 1000 - v.timestamp)) : null
+    });
+  });
+
+  // Fit the demand distribution to the whole network, then score each vehicle.
+  // The fit uses every in-service vehicle, not the filtered subset: demand is a
+  // property of the network at this moment, not of what the reader has selected.
+  FIT = fitDemand(list);
+  list.forEach(function (v) {
+    var prof = PROFILES[v.mode], b = band(prof, v.occ);
+    v.lo = b[0]; v.hi = b[1];
+    v.people = estimate(prof, v.occ);
+    v.vari = variance(prof, v.occ);
+  });
+  VEHICLES = list;
+}
+
+// ---------------------------------------------------------------- filtering
+function anyOn(o) { for (var k in o) if (o[k]) return true; return false; }
+function passes(v, skip) {
+  if (skip !== 'mode' && anyOn(state.modes) && !state.modes[v.mode]) return false;
+  if (skip !== 'op'   && anyOn(state.ops)   && !state.ops[v.operator]) return false;
+  if (skip !== 'occ'  && anyOn(state.occ)   && !state.occ[v.occ]) return false;
+  if (state.search && v.route.toLowerCase().indexOf(state.search) === -1) return false;
+  return true;
+}
+function filtered(skip) { return VEHICLES.filter(function (v) { return passes(v, skip); }); }
+
+// ---------------------------------------------------------------- helpers
+function n(x) { return Math.round(x).toLocaleString('en-NZ'); }
+function group(list, keyFn) {
+  var m = {};
+  list.forEach(function (v) {
+    var k = keyFn(v);
+    var g = m[k] || (m[k] = { key:k, vehicles:0, people:0, modes:{} });
+    g.vehicles++; g.people += v.people; g.modes[v.mode] = (g.modes[v.mode] || 0) + 1;
+  });
+  return Object.keys(m).map(function (k) { var g = m[k]; g.avg = g.people / g.vehicles; return g; });
+}
+function el(tag, cls, html) { var e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
+
+// ---------------------------------------------------------------- render: filters
+function chip(container, label, on, count, colour, onClick) {
+  var b = el('button', 'chip' + (on ? ' on' : ''));
+  b.innerHTML = (colour ? '<span class="dot" style="background:' + colour + '"></span>' : '') +
+                label + ' <span class="ct">' + count + '</span>';
+  b.addEventListener('click', onClick);
+  container.appendChild(b);
+}
+
+function renderFilters() {
+  var m = document.getElementById('f-mode'); m.innerHTML = '';
+  ['train', 'dd', 'bus'].forEach(function (k) {
+    var c = filtered('mode').filter(function (v) { return v.mode === k; }).length;
+    if (!c && !state.modes[k]) return;
+    chip(m, PROFILES[k].name, !!state.modes[k], c, null, function () {
+      state.modes[k] = !state.modes[k]; renderAll();
+    });
+  });
+
+  var o = document.getElementById('f-op'); o.innerHTML = '';
+  group(filtered('op'), function (v) { return v.operator; })
+    .sort(function (a, b) { return b.vehicles - a.vehicles; })
+    .forEach(function (g) {
+      chip(o, g.key, !!state.ops[g.key], g.vehicles, null, function () {
+        state.ops[g.key] = !state.ops[g.key]; renderAll();
+      });
+    });
+  Object.keys(state.ops).forEach(function (k) {   // keep selected-but-now-empty operators visible
+    if (state.ops[k] && !filtered('op').some(function (v) { return v.operator === k; }))
+      chip(o, k, true, 0, null, function () { state.ops[k] = false; renderAll(); });
+  });
+
+  var q = document.getElementById('f-occ'); q.innerHTML = '';
+  CATEGORIES.forEach(function (c, i) {
+    var ct = filtered('occ').filter(function (v) { return v.occ === i; }).length;
+    if (!ct && !state.occ[i]) return;
+    chip(q, c.label, !!state.occ[i], ct, c.colour, function () {
+      state.occ[i] = !state.occ[i]; renderAll();
+    });
+  });
+}
+
+// ---------------------------------------------------------------- render: everything else
+function renderAll() {
+  var vs = filtered();
+  var people = vs.reduce(function (a, v) { return a + v.people; }, 0);
+  var isFiltered = anyOn(state.modes) || anyOn(state.ops) || anyOn(state.occ) || state.search;
+
+  document.getElementById('headline').innerHTML =
+    'About <span class="n">' + n(people) + '</span> ' +
+    (Math.round(people) === 1 ? 'person is' : 'people are') +
+    (isFiltered ? ' on the selected services.' : ' on Auckland public transport right now.');
+  var sd = Math.sqrt(vs.reduce(function (a, v) { return a + v.vari; }, 0));
+  var half = 1.645 * sd;                                  // 90% interval
+  document.getElementById('sub').innerHTML =
+    'Most likely between <b>' + n(Math.max(0, people - half)) + '</b> and <b>' + n(people + half) +
+    '</b>, across ' + n(vs.length) + ' vehicle' + (vs.length === 1 ? '' : 's') + ' in service.';
+  document.getElementById('bounds').textContent = vs.length
+    ? 'Absolute bounds, if every vehicle sat at one end of its band at once: ' +
+      n(vs.reduce(function (a, v) { return a + v.lo; }, 0)) + ' to ' +
+      n(vs.reduce(function (a, v) { return a + v.hi; }, 0)) + '.'
+    : '';
+  document.getElementById('filternote').textContent = isFiltered
+    ? 'Filtered from ' + VEHICLES.length + ' vehicles carrying an estimated ' +
+      n(VEHICLES.reduce(function (a, v) { return a + v.people; }, 0)) + ' people in total.'
+    : '';
+
+  // cards by mode
+  var cards = document.getElementById('cards'); cards.innerHTML = '';
+  ['train', 'dd', 'bus'].forEach(function (k) {
+    var g = vs.filter(function (v) { return v.mode === k; });
+    if (!g.length) return;
+    var ppl = g.reduce(function (a, v) { return a + v.people; }, 0);
+    cards.appendChild(el('div', 'card',
+      '<div class="k">' + PROFILES[k].plural + '</div><div class="v">' + n(ppl) + '</div>' +
+      '<div class="d">aboard ' + g.length + ' vehicle' + (g.length === 1 ? '' : 's') +
+      ' · avg ' + (ppl / g.length).toFixed(1) + '</div>'));
+  });
+  if (vs.length) {
+    var occAvg = people / vs.length;
+    cards.appendChild(el('div', 'card',
+      '<div class="k">All vehicles</div><div class="v">' + occAvg.toFixed(1) + '</div>' +
+      '<div class="d">average people aboard</div>'));
+  }
+
+  // by occupancy
+  var tb = document.querySelector('#t-occ tbody'); tb.innerHTML = '';
+  var maxV = Math.max.apply(null, CATEGORIES.map(function (c, i) {
+    return vs.filter(function (v) { return v.occ === i; }).length;
+  }).concat([1]));
+  CATEGORIES.forEach(function (c, i) {
+    var g = vs.filter(function (v) { return v.occ === i; });
+    if (!g.length) return;
+    var ppl = g.reduce(function (a, v) { return a + v.people; }, 0);
+    var tr = el('tr', null,
+      '<td><span class="swatch" style="background:' + c.colour + '"></span>' + c.label +
+        '<div class="bar"><i style="width:' + (100 * g.length / maxV) + '%;background:' + c.colour + '"></i></div></td>' +
+      '<td class="num">' + g.length + '</td><td class="num">' + n(ppl) + '</td>' +
+      '<td class="num">' + (ppl / g.length).toFixed(1) + '</td>');
+    tb.appendChild(tr);
+  });
+  if (!tb.children.length) tb.appendChild(el('tr', null, '<td colspan="4" class="empty">No vehicles match these filters.</td>'));
+
+  // by operator
+  var ob = document.querySelector('#t-op tbody'); ob.innerHTML = '';
+  group(vs, function (v) { return v.operator; })
+    .sort(function (a, b) { return b.people - a.people; })
+    .forEach(function (g) {
+      ob.appendChild(el('tr', null,
+        '<td>' + g.key + '</td><td class="num">' + g.vehicles + '</td>' +
+        '<td class="num">' + n(g.people) + '</td><td class="num">' + g.avg.toFixed(1) + '</td>'));
+    });
+  if (!ob.children.length) ob.appendChild(el('tr', null, '<td colspan="4" class="empty">No vehicles match these filters.</td>'));
+
+  renderRoutes(vs);
+  renderFilters();
+}
+
+function renderRoutes(vs) {
+  var groups = group(vs, function (v) { return v.route; });
+  groups.sort(function (a, b) {
+    var x = sort.k === 'name' ? String(a.key).localeCompare(String(b.key), undefined, { numeric:true }) : a[sort.k] - b[sort.k];
+    return x * sort.dir;
+  });
+
+  document.querySelectorAll('#t-route th.s').forEach(function (th) {
+    th.querySelector('.arr').textContent = th.dataset.k === sort.k ? (sort.dir < 0 ? '▼' : '▲') : '';
+  });
+
+  var tb = document.querySelector('#t-route tbody'); tb.innerHTML = '';
+  var shown = groups.slice(0, 60);
+
+  shown.forEach(function (g) {
+    var modes = Object.keys(g.modes).sort(function (a, b) { return g.modes[b] - g.modes[a]; })
+      .map(function (k) { return PROFILES[k].name + (Object.keys(g.modes).length > 1 ? ' ×' + g.modes[k] : ''); })
+      .join(', ');
+    var open = !!expanded[g.key];
+    var tr = el('tr', 'exp',
+      '<td><span class="tw">' + (open ? '▾' : '▸') + '</span>' + g.key + '</td>' +
+      '<td class="muted">' + modes + '</td>' +
+      '<td class="num">' + g.vehicles + '</td>' +
+      '<td class="num">' + n(g.people) + '</td>' +
+      '<td class="num">' + g.avg.toFixed(1) + '</td>');
+    tr.addEventListener('click', function () { expanded[g.key] = !expanded[g.key]; renderRoutes(vs); });
+    tb.appendChild(tr);
+
+    if (!open) return;
+    var rows = vs.filter(function (v) { return v.route === g.key; })
+                 .sort(function (a, b) { return (a.direction - b.direction) || (b.people - a.people); });
+    var inner = '<table><tbody>' + rows.map(function (v) {
+      return '<tr><td>' + v.label + ' <span class="muted">' + PROFILES[v.mode].name + '</span></td>' +
+             '<td><span class="pill" style="background:' + CATEGORIES[v.occ].colour + '">' + CATEGORIES[v.occ].label + '</span></td>' +
+             '<td class="num">~' + n(v.people) + ' people</td>' +
+             '<td class="num muted">dir ' + (v.direction != null ? v.direction : '—') + '</td>' +
+             '<td class="num muted">' + (v.speed != null ? v.speed.toFixed(0) + ' km/h' : '—') + '</td>' +
+             '<td class="num muted">' + (v.age != null ? v.age + 's ago' : '—') + '</td></tr>';
+    }).join('') + '</tbody></table>';
+    var str = el('tr', 'sub-t');
+    var td = el('td', null, inner); td.colSpan = 5; td.style.padding = '0 0 0 0';
+    str.appendChild(td); tb.appendChild(str);
+  });
+
+  if (!shown.length) tb.appendChild(el('tr', null, '<td colspan="5" class="empty">No vehicles match these filters.</td>'));
+  document.getElementById('routemore').textContent =
+    groups.length > shown.length ? 'Showing top ' + shown.length + ' of ' + groups.length + ' routes.' : '';
+}
+
+function cell(prof, i) {
+  var b = band(prof, i);
+  var lo = Math.round(b[0]), hi = Math.round(b[1]);
+  return '<b>' + n(estimate(prof, i)) + '</b>' +
+         (lo === hi ? '' : ' <span class="muted">(' + lo + '–' + hi + ')</span>');
+}
+function renderModel() {
+  var tb = document.querySelector('#t-model tbody'); tb.innerHTML = '';
+  CATEGORIES.forEach(function (c, i) {
+    tb.appendChild(el('tr', null,
+      '<td><span class="swatch" style="background:' + c.colour + '"></span>' + c.label + '</td>' +
+      '<td class="muted">' + c.band + '</td>' +
+      '<td class="num">' + cell(PROFILES.bus, i) + '</td>' +
+      '<td class="num">' + cell(PROFILES.dd, i) + '</td>' +
+      '<td class="num">' + cell(PROFILES.train, i) + '</td>'));
+  });
+}
+
+// ---------------------------------------------------------------- csv
+function csv() {
+  var head = ['route', 'vehicle', 'operator', 'mode', 'occupancy', 'est_people', 'direction', 'speed_kmh', 'age_s'];
+  var rows = filtered().map(function (v) {
+    return [v.route, v.label, v.operator, PROFILES[v.mode].name, CATEGORIES[v.occ].label,
+            Math.round(v.people), v.direction, v.speed != null ? v.speed.toFixed(1) : '', v.age]
+      .map(function (x) { return '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"'; }).join(',');
+  });
+  var blob = new Blob([head.join(',') + '\n' + rows.join('\n')], { type:'text/csv' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'at-ridership-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.csv';
+  a.click();
+  setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+}
+
+// ---------------------------------------------------------------- run
+function load() {
+  document.getElementById('err').innerHTML = '';
+  return loadRoutes().then(function (routes) {
+    return get('/realtime/legacy/vehiclelocations').then(function (d) {
+      var res = (d && d.response) || {};
+      META.stamp = new Date(((res.header && res.header.timestamp) || Date.now() / 1000) * 1000);
+      build(res.entity || [], routes);
+      renderAll();
+      renderModel();
+      document.getElementById('fitnote').innerHTML = FIT
+        ? 'Within-band positions fitted to this snapshot: Gamma(k=' + FIT.k.toFixed(2) +
+          ', &theta;=' + FIT.th.toFixed(3) + ') on load as a share of seats, mean ' +
+          (100 * FIT.k * FIT.th).toFixed(1) + '% of seated capacity.'
+        : 'Too few occupancy categories reported to fit a distribution — using fallback percentiles.';
+      document.getElementById('ferrynote').textContent = META.ferriesRunning
+        ? 'Ferries are excluded: ' + META.ferriesRunning + ' were sailing, but they do not report occupancy.'
+        : 'Ferries are excluded because they do not report occupancy.';
+      document.getElementById('stamp').textContent =
+        'Feed timestamp ' + META.stamp.toLocaleTimeString('en-NZ') +
+        (META.noOccupancy ? ' · ' + META.noOccupancy + ' in-service vehicles reported no occupancy' : '');
+    });
+  }).catch(function (e) {
+    document.getElementById('err').innerHTML = '<div class="err">Could not load the feed: ' + e.message + '</div>';
+  });
+}
+
+document.getElementById('refresh').addEventListener('click', load);
+document.getElementById('csv').addEventListener('click', csv);
+document.getElementById('f-clear').addEventListener('click', function () {
+  state = { modes:{}, ops:{}, occ:{}, search:'' };
+  document.getElementById('f-search').value = '';
+  renderAll();
+});
+document.getElementById('f-search').addEventListener('input', function (e) {
+  state.search = e.target.value.trim().toLowerCase(); renderAll();
+});
+document.querySelectorAll('#t-route th.s').forEach(function (th) {
+  th.addEventListener('click', function () {
+    var k = th.dataset.k;
+    if (sort.k === k) sort.dir *= -1; else { sort.k = k; sort.dir = k === 'name' ? 1 : -1; }
+    renderRoutes(filtered());
+  });
+});
+
+renderModel();
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>
